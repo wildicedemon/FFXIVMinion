@@ -1,4 +1,4 @@
-﻿-- Skillmanager for adv. skill customization
+-- Skillmanager for adv. skill customization
 SkillMgr = { }
 SkillMgr.version = "v0.5";
 SkillMgr.profilepath = GetStartupPath() .. [[\LuaMods\ffxivminion\SkillManagerProfiles\]];
@@ -14,6 +14,7 @@ SkillMgr.UIRefreshPending = false
 SkillMgr.UIRefreshTmr = 0
 SkillMgr.StoopidEventAlreadyRegisteredList = {}
 SkillMgr.prevSkillID = ""
+SkillMgr.lastSkillID = ""
 
 function SkillMgr.ModuleInit() 	
     if (Settings.FFXIVMINION.gSMactive == nil) then
@@ -71,7 +72,7 @@ function SkillMgr.ModuleInit()
 	GUI_NewNumeric(SkillMgr.editwindow.name,"Player TP <","SKM_PTPB","SkillDetails") -- Needs a string
     GUI_NewComboBox(SkillMgr.editwindow.name,strings[gCurrentLanguage].combatType,"SKM_PVEPVP","SkillDetails", "");
     SKM_PVEPVP_listitems = strings[gCurrentLanguage].pve..","..strings[gCurrentLanguage].pvpMode..","..strings[gCurrentLanguage].both
-    GUI_NewComboBox(SkillMgr.editwindow.name,strings[gCurrentLanguage].targetType,"SKM_TRG","SkillDetails","Enemy,Player,Pet,Ally");
+    GUI_NewComboBox(SkillMgr.editwindow.name,strings[gCurrentLanguage].targetType,"SKM_TRG","SkillDetails","Enemy,Player,Pet,Ally,Tank");
     GUI_NewComboBox(SkillMgr.editwindow.name,strings[gCurrentLanguage].pvpTargetType,"SKM_PVPTRG","SkillDetails", "");
     SKM_PVPTRG_listitems = strings[gCurrentLanguage].healer..","..strings[gCurrentLanguage].dps..","..strings[gCurrentLanguage].tank..","..strings[gCurrentLanguage].any
     GUI_NewNumeric(SkillMgr.editwindow.name,strings[gCurrentLanguage].targetHPGT,"SKM_THPL","SkillDetails");
@@ -773,7 +774,7 @@ function SkillMgr.CreateNewSkillEntry(skill)
             }	
         end		
     end
-end	
+end
 --+	Button Handler for ProfileList Skills
 function SkillMgr.EditSkill(event)
     local wnd = GUI_GetWindowInfo(SkillMgr.mainwindow.name)	
@@ -905,7 +906,7 @@ function SkillMgr.GetHealSpellHPLimit()
     if ( TableSize(SkillMgr.SkillProfile) > 0 ) then
         for prio,skill in pairs(SkillMgr.SkillProfile) do
             --d(tostring(skill.trg).." "..tostring(skill.thpb))
-            if ( (skill.trg == "Ally" or skill.trg == "Player") and skill.thpb > 0 and skill.thpb > highestHPLimit ) then
+            if ( (skill.trg == "Ally" or skill.trg == "Player" or skill.trg == "Tank") and skill.thpb > 0 and skill.thpb > highestHPLimit ) then
                 highestHPLimit = skill.thpb
             end
         end
@@ -916,7 +917,7 @@ end
 function SkillMgr.Cast( entity )
     if ( entity ) then
         -- first check if we're in combat or not for the start combat setting
-        if (gBotmode == strings[gCurrentLanguage].assistMode and gStartCombat == "0" and not Player.incombat) then
+        if (gStartCombat == "0" and not Player.incombat) then
             return
         end
 	
@@ -927,8 +928,11 @@ function SkillMgr.Cast( entity )
         local ebuffs = entity.buffs
         
         local pet = Player.pet
+		local tank = GetBestHealTargetTank()
         local plist = EntityList.myparty
         local ally = GetBestHealTarget()
+		local isally = false
+		local targetbased = false
 		local plistAE = nil
         
         if ( EID and PID and TableSize(SkillMgr.SkillProfile) > 0 and not ActionList:IsCasting()) then
@@ -1001,34 +1005,46 @@ function SkillMgr.Cast( entity )
                                     castable = false 
                                 else
                                     -- we need to cast the summon on our player
+									isally = true
                                     target = Player
                                     TID = PID
                                     tbuffs = pbuffs
                                 end
                             end
+						elseif ( skill.trg == "Tank" ) then
+						    if ( tank ~= nil and ally.id ~= PID) then
+								isally = true
+                                target = tank
+                                TID = tank.id
+                                tbuffs = tank.buffs
+                            end
                         elseif ( skill.trg == "Ally" ) then
                             if ( ally ~= nil and ally.id ~= PID) then
+								isally = true	
                                 target = ally
                                 TID = ally.id
                                 tbuffs = ally.buffs
                             end
-                        elseif ( skill.trg == "Player" ) then							
+                        elseif ( skill.trg == "Player" ) then
+							isally = true							
                             target = Player
                             TID = PID
                             tbuffs = pbuffs
                         end
                         
-						local isPVP = Player.localmapid == 175 or Player.localmapid == 336 or Player.localmapid == 337
-                        if (skill.pvepvp == strings[gCurrentLanguage].pvpMode and not isPVP) then castable = false end
+                        if (skill.pvepvp == strings[gCurrentLanguage].pvpMode and Player.localmapid ~= 175) then castable = false end--change this to be the wolves den id
                         
-                        if (skill.pvepvp == strings[gCurrentLanguage].pve and isPVP) then castable = false end
+                        if (skill.pvepvp == strings[gCurrentLanguage].pve and Player.localmapid == 175) then castable = false end--change this to be the wolves den id
                         
                         if (castable and skill.pvepvp ~= strings[gCurrentLanguage].pve and skill.pvptrg ~= strings[gCurrentLanguage].any) then
                             local roleString = GetRoleString(target.job)
                             if skill.pvptrg ~= roleString then castable = false end
                         end
                         
-                        -- RANGE 							
+                        -- RANGE 	
+						if skill.maxRange > 0 then							
+							targetbased = true
+						end						
                         if ( castable and (
                                    (skill.minRange > 0 and target.distance2d < skill.minRange)
                                 or (skill.maxRange > 0 and target.distance2d > skill.maxRange+target.hitradius+1)--target.distance2d- target.hitradius > skill.maxRange)
@@ -1058,9 +1074,10 @@ function SkillMgr.Cast( entity )
                         
                         -- TARGET AE CHECK
                         if ( castable and skill.tecount > 0 and skill.terange > 0) then
-                            if ( ( TableSize(EntityList("alive,attackable,maxdistance="..skill.terange..",distanceto="..target.id)) < skill.tecount)) then
-                                castable = false
-                            end
+                           	target = GetAoETarget(isally,targetbased,skill.maxRange,skill.terange,skill.thpb,skill.thpl,skill.tecount,target)
+							if target == false then
+								castable = false
+							end
                         end
 						
 						-- ALLY AE CHECK
@@ -1119,9 +1136,14 @@ function SkillMgr.Cast( entity )
                                 --d("CASTING : "..tostring(skill.name) .." on "..tostring(target.name) .." Prio="..skill.prio)								
                                 if ( ActionList:Cast(skill.id,TID) ) then									
                                     skill.lastcast = ml_global_information.Now
-                                    SkillMgr.prevSkillID = tostring(skill.id)
-									
-                                    return true
+									    if ShouldNotSetPrev(skill.id) == true then
+                                                 SkillMgr.prevSkillID = tostring(skill.id)                                                                                
+                                        end
+                                        if SkillMgr.lastSkillID == tostring(skill.id) then
+                                                SkillMgr.prevSkillID = tostring(skill.id)
+                                        end
+                                        SkillMgr.lastSkillID = tostring(skill.id)
+										return true
                                 end
                             --[[elseif ( ActionList:CanCast(skill.id,tonumber(PID) )) then
                                 d("CASTING(heal/buff) : "..tostring(skill.name) .." on "..tostring(target.name))
